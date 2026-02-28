@@ -34,7 +34,7 @@ DevSync AI is an AI-powered developer collaboration platform. It allows develope
 
 ### 1. Clone the repository
 ```bash
-git clone <your-repository-url>
+git clone suryanshsugara
 cd "DevSync AI SaaS UI Design"
 ```
 
