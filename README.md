@@ -80,6 +80,33 @@ When accessing `http://localhost:5173/`, it auto-authenticates a mock `demo@devs
 *   `/backend/src/analytics`: Analytics data aggregation using Prisma.
 
 ## 💡 Planned Enhancements
-*   Docker Compose deployment for production PostgreSQL and Redis.
-*   Integration with actual AI Providers (OpenAI/Anthropic).
 *   Live Multi-cursor Code View capabilities.
+
+---
+
+## ☁️ Deployment Guide
+
+### Deploying the Backend on Render
+1. Go to [Render.com](https://render.com) and create a new **Web Service**.
+2. Connect this GitHub repository.
+3. Configure the following matching the repository setup:
+   *   **Root Directory:** `backend`
+   *   **Environment:** `Node`
+   *   **Build Command:** `npm ci && npm run build`
+   *   **Start Command:** `npm run start:prod`
+4. In the **Environment Variables** section, add the following missing secrets:
+   *   `DATABASE_URL`: Set this to your PostgreSQL database URL (you can provision a free Postgres instance directly on Render first).
+   *   `JWT_SECRET`: Generate a random long string.
+   *   `JWT_REFRESH_SECRET`: Generate a random long string.
+   *   `OPENAI_API_KEY`: Add your provider API keys.
+5. Deploy!
+
+### Deploying the Frontend on Vercel
+1. Go to [Vercel.com](https://vercel.com) and create a new project.
+2. Import this GitHub repository.
+3. Configure the following:
+   *   **Framework Preset:** `Vite`
+   *   **Root Directory:** `./` (Root)
+4. Open the **Environment Variables** tab and add the following:
+   *   `VITE_API_URL`: The URL of your **Render Backend** (e.g., `https://devsync-ai.onrender.com`).
+5. Deploy! Vercel will automatically build the React Vite application and hook the API.

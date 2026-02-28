@@ -11,7 +11,9 @@ async function bootstrap() {
       transform: true,
     }),
   );
-  app.enableCors(); // Enables connections from the React frontend
-  await app.listen(process.env.PORT ?? 3000);
+  app.enableCors({
+    origin: '*',
+  }); // Enables connections from the React frontend unconditionally for demo
+  await app.listen(process.env.PORT ?? 10000);
 }
 bootstrap();
