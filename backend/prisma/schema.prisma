@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum Role {
+  DEVELOPER
+  TEAM_LEAD
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(DEVELOPER)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  rooms       Room[]       @relation("RoomOwner")
+  roomMembers RoomMember[]
+  messages    Message[]
+  aiUsageLogs AiUsageLog[]
+
+  @@map("users")
+}
+
+model Room {
+  id        String   @id @default(uuid())
+  name      String
+  ownerId   String   @map("owner_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  owner       User         @relation("RoomOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     RoomMember[]
+  messages    Message[]
+  aiUsageLogs AiUsageLog[]
+
+  @@unique([ownerId, name]) // Prevent duplicate rooms by same owner
+  @@map("rooms")
+}
+
+model RoomMember {
+  userId   String   @map("user_id")
+  roomId   String   @map("room_id")
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roomId]) // Composite PK to prevent duplicate joins
+  @@map("room_members")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  roomId    String   @map("room_id")
+  userId    String?  @map("user_id") // Nullable if sent by AI
+  isAi      Boolean  @default(false) @map("is_ai")
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  room Room  @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([roomId])
+  @@map("messages")
+}
+
+model AiUsageLog {
+  id         String   @id @default(uuid())
+  roomId     String   @map("room_id")
+  userId     String   @map("user_id")
+  tokensUsed Int      @map("tokens_used")
+  provider   String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_usage_logs")
+}

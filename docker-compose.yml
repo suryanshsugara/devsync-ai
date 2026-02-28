@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    container_name: devsync-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: devsync
+    ports:
+      - "5432:5432"
+    volumes:
+      - devsync-db-data:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  devsync-db-data:

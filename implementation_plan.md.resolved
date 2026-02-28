@@ -1,0 +1,133 @@
+# DevSync AI SaaS Implementation Plan
+
+## 1. Recommended Stack
+- **Backend Framework:** **Node.js with NestJS**
+  - *Reasoning:* NestJS provides a highly modular, opinionated, production-ready architecture out of the box. It heavily utilizes TypeScript and Dependency Injection, making it perfect for enterprise SaaS. It separates controllers and services, which naturally leads to cleaner "production-structured" code compared to single-file Express scripts. It also has built-in module support for WebSockets, JWT Auth, and Rate Limiting.
+- **Database:** **PostgreSQL**
+  - *Reasoning:* Highly reliable, ACID compliant, and perfectly suited for the relational data model we have (Users, Rooms, Messages). 
+- **ORM:** **Prisma**
+  - *Reasoning:* Type-safe database client and migration tool. Ensures backend TS types strictly match DB types.
+- **Caching & Pub/Sub:** **Redis**
+  - *Reasoning:* Required for managing WebSocket connections across multiple backend instances, implementing rate limiting, and caching room analytics.
+
+---
+
+## 2. High-Level Architecture Diagram
+```mermaid
+graph TD
+    Client[React + Vite Frontend] --> LB[Load Balancer / Ingress]
+    LB --> API1[NestJS Backend Node 1]
+    LB --> API2[NestJS Backend Node 2]
+    
+    API1 <--> Redis[(Redis Cache & PubSub)]
+    API2 <--> Redis
+
+    API1 <--> Postgres[(PostgreSQL DB)]
+    API2 <--> Postgres
+    
+    API1 --> AI[AI Provider API - OpenAI/Claude]
+    API2 --> AI
+```
+
+---
+
+## 3. Database Schema Design
+We will use Prisma to define this schema.
+
+- **User**
+  - `id` (UUID, Primary Key)
+  - `email` (String, Unique)
+  - `password_hash` (String)
+  - `role` (Enum: `DEVELOPER`, `TEAM_LEAD`)
+  - `createdAt`, `updatedAt`
+- **Room**
+  - `id` (UUID, Primary Key)
+  - `name` (String)
+  - `ownerId` (UUID, Foreign Key to User)
+  - `createdAt`, `updatedAt`
+  - *Constraint: `[ownerId, name]` unique to prevent duplicate rooms by the same user.*
+- **RoomMember**
+  - `userId` (UUID, Foreign Key to User)
+  - `roomId` (UUID, Foreign Key to Room)
+  - `joinedAt` (DateTime)
+  - *Constraint: Composite Primary Key `[userId, roomId]` to prevent duplicate joins.*
+- **Message**
+  - `id` (UUID, Primary Key)
+  - `roomId` (UUID, Foreign Key to Room)
+  - `userId` (UUID, Nullable, Foreign Key to User)
+  - `isAi` (Boolean, Default: false)
+  - `content` (Text)
+  - `createdAt` (DateTime)
+- **AiUsageLog**
+  - `id` (UUID, Primary Key)
+  - `roomId` (UUID, Foreign Key to Room)
+  - `userId` (UUID, Foreign Key to User)
+  - `tokensUsed` (Int)
+  - `provider` (String)
+  - `createdAt` (DateTime)
+
+*Indexes Recommended: `Message.roomId`, `RoomMember.userId`, `Room.ownerId`.*
+
+---
+
+## 4. Auth Flow
+1. **Registration:** User submits email/password -> Backend hashes password via `bcrypt` -> Stores user in DB.
+2. **Login:** Validate hash -> Generate a short-lived **JSON Web Token (JWT)** (e.g., 15 mins) and a long-lived **Refresh Token** (HttpOnly Cookie, 7 days).
+3. **API Access:** Frontend attaches `Authorization: Bearer <token>` to REST API and WebSocket connection hands.
+4. **Role checks:** NestJS `RolesGuard` applied to endpoints (e.g., only `TEAM_LEAD` can fetch analytics).
+5. **Token Expiration:** Frontend intercepts 401s, calls `/refresh` route, and retries the original request.
+
+---
+
+## 5. AI Integration Strategy
+We will use an adapter pattern to allow pluggable providers (OpenAI default).
+- **Trigger:** A WebSocket message parsed to target AI (e.g., mentioning `@ai` or pressing "Ask AI" button).
+- **Context Gathering:** Fetch the most recent 10 messages from the PostgreSQL `Message` table for that room.
+- **Safety / Truncation:** Use a tokenizer library (like `tiktoken`) to measure prompt length. If it exceeds limits, drop the oldest messages.
+- **System Prompt Formulation:** Inject a system prompt that dictates the structured output model.
+  ```json
+  "You are DevSync AI. Provide debugging help. Format response as JSON structure exactly: {\"ai_response\": \"string\", \"confidence_score\": number (1-10)}"
+  ```
+- **Execution:** Send request with a strict API **Timeout (10s)**.
+- **Failure:** Provide a fallback message ("AI module temporarily unavailable") if API fails or times out.
+
+---
+
+## 6. Edge Case Handling Matrix
+
+| Scenario | Handling Strategy |
+| :--- | :--- |
+| **Expired JWT** | NestJS AuthGuard throws 401. Client intercepts, uses Refresh Token to obtain new JWT, retries original request. |
+| **Tampered JWT** | Crypto signature validation fails securely on backend -> throws 401 Unauthorized. Session terminates. |
+| **Unauthorized Room Access** | API endpoint and WebSocket room-join events enforce a DB check (`RoomMember` lookup). Throws 403 Forbidden. |
+| **Non-owner Delete Attempts** | Backend verifies `room.ownerId === jwt.userId`. Throws 403 Forbidden. |
+| **Duplicate Room Names** | Database `@@unique([ownerId, name])` constraint throws Prisma Error. Handled by generic map to 409 Conflict. |
+| **Duplicate Room Joins** | Database `@@id([userId, roomId])` composite key prevents duplicate join rows on UPSERT. |
+| **AI API Rate Limit Errors** | Backend catches 429 status. Sends UI an event: "AI busy, try again in X seconds". |
+| **AI Timeout** | Implemented using an `AbortController`. At 10s: abort request, return 408 Timeout message to chat. |
+| **Long Payload Truncation** | Discard oldest messages from context array until token count < safe max tokens boundary. |
+| **Concurrent Room Joins / Interactions** | DB transactions wrap multi-step processes. WebSocket concurrency handled by Redis PubSub events strictly ordered. |
+| **Database Transaction Rollback** | Use Prisma interactive transactions (`prisma.$transaction`). Auto-rollback on any intermediate failure (e.g. create room + add owner to members). |
+| **Network Failure Retry** | Placed in HTTP Interceptors on frontend for idempotent actions (GETs). Max 3 retries with exponential backoff. |
+| **Backend Crash Prevention** | NestJS Global Exception Filter catches all unhandled exceptions. Emits cleanly formatted 500 without leaking stack traces. Process monitoring via PM2/Docker health checks. |
+
+---
+
+## 7. Deployment Plan
+- **Compute (Backend):** Containerize the NestJS application via Docker. Deploy to **AWS ECS (Fargate)**, **Railway**, or **Render** for easy stateless scaling.
+- **Database Host:** Managed PostgreSQL provider like **Supabase DB** or **AWS RDS**.
+- **Caching Host:** Managed Redis cluster (e.g., **Upstash** or AWS ElastiCache) to support rate limits and WebSocket multi-instance scaling.
+- **Environment Management:** Maintain `.env.development` and inject secrets securely into production via AWS Parameter Store / GitHub Secrets. No hardcoded configs in repo.
+- **Logging strategy:** Pino / Winston logger streaming structured JSON logs out to stdout -> Datadog / AWS CloudWatch.
+
+---
+
+## 8. Step-by-Step Implementation Roadmap
+*   **Phase 1:** Backend Initialization (NestJS setup, project structuring, modules definition)
+*   **Phase 2:** Database Setup (Prisma schema, migrations, seed scripts)
+*   **Phase 3:** Core Auth (JWT Strategy, Guards, User Endpoints)
+*   **Phase 4:** Workspace Module (Rooms CRUD, Membership DB transactions)
+*   **Phase 5:** Real-time Chat Engine (WebSockets via Socket.io with Redis Pub/Sub, Chat Guards)
+*   **Phase 6:** AI Agent Integration (Pluggable providers, ratelimits, timeouts, structured responses)
+*   **Phase 7:** Frontend Wiring (Connect React context/state to real APIs and WS URLs)
+*   **Phase 8:** Edge Case Hardening & QA (Testing auth bypasses, API failures, token expirations)
